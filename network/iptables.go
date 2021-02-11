@@ -28,15 +28,20 @@ import (
 	"github.com/coreos/go-iptables/iptables"
 )
 
+const FlannelFwdChain = "FLANNEL-FORWARD"
+
 type IPTables interface {
+	NewChain(table, chain string) error
 	AppendUnique(table string, chain string, rulespec ...string) error
 	Delete(table string, chain string, rulespec ...string) error
 	Exists(table string, chain string, rulespec ...string) (bool, error)
+	Insert(table, chain string, pos int, rulespec ...string) error
 }
 
 type IPTablesRule struct {
 	table    string
 	chain    string
+	pos      int
 	rulespec []string
 }
 
@@ -52,24 +57,24 @@ func MasqRules(ipn ip.IP4Net, lease *subnet.Lease) []IPTablesRule {
 	if supports_random_fully {
 		return []IPTablesRule{
 			// This rule makes sure we don't NAT traffic within overlay network (e.g. coming out of docker0)
-			{"nat", "POSTROUTING", []string{"-s", n, "-d", n, "-j", "RETURN"}},
+			{table: "nat", chain: "POSTROUTING", rulespec: []string{"-s", n, "-d", n, "-j", "RETURN"}},
 			// NAT if it's not multicast traffic
-			{"nat", "POSTROUTING", []string{"-s", n, "!", "-d", "224.0.0.0/4", "-j", "MASQUERADE", "--random-fully"}},
+			{table: "nat", chain: "POSTROUTING", rulespec: []string{"-s", n, "!", "-d", "224.0.0.0/4", "-j", "MASQUERADE", "--random-fully"}},
 			// Prevent performing Masquerade on external traffic which arrives from a Node that owns the container/pod IP address
-			{"nat", "POSTROUTING", []string{"!", "-s", n, "-d", sn, "-j", "RETURN"}},
+			{table: "nat", chain: "POSTROUTING", rulespec: []string{"!", "-s", n, "-d", sn, "-j", "RETURN"}},
 			// Masquerade anything headed towards flannel from the host
-			{"nat", "POSTROUTING", []string{"!", "-s", n, "-d", n, "-j", "MASQUERADE", "--random-fully"}},
+			{table: "nat", chain: "POSTROUTING", rulespec: []string{"!", "-s", n, "-d", n, "-j", "MASQUERADE", "--random-fully"}},
 		}
 	} else {
 		return []IPTablesRule{
 			// This rule makes sure we don't NAT traffic within overlay network (e.g. coming out of docker0)
-			{"nat", "POSTROUTING", []string{"-s", n, "-d", n, "-j", "RETURN"}},
+			{table: "nat", chain: "POSTROUTING", rulespec: []string{"-s", n, "-d", n, "-j", "RETURN"}},
 			// NAT if it's not multicast traffic
-			{"nat", "POSTROUTING", []string{"-s", n, "!", "-d", "224.0.0.0/4", "-j", "MASQUERADE"}},
+			{table: "nat", chain: "POSTROUTING", rulespec: []string{"-s", n, "!", "-d", "224.0.0.0/4", "-j", "MASQUERADE"}},
 			// Prevent performing Masquerade on external traffic which arrives from a Node that owns the container/pod IP address
-			{"nat", "POSTROUTING", []string{"!", "-s", n, "-d", sn, "-j", "RETURN"}},
+			{table: "nat", chain: "POSTROUTING", rulespec: []string{"!", "-s", n, "-d", sn, "-j", "RETURN"}},
 			// Masquerade anything headed towards flannel from the host
-			{"nat", "POSTROUTING", []string{"!", "-s", n, "-d", n, "-j", "MASQUERADE"}},
+			{table: "nat", chain: "POSTROUTING", rulespec: []string{"!", "-s", n, "-d", n, "-j", "MASQUERADE"}},
 		}
 	}
 }
@@ -77,8 +82,9 @@ func MasqRules(ipn ip.IP4Net, lease *subnet.Lease) []IPTablesRule {
 func ForwardRules(flannelNetwork string) []IPTablesRule {
 	return []IPTablesRule{
 		// These rules allow traffic to be forwarded if it is to or from the flannel network range.
-		{"filter", "FORWARD", []string{"-s", flannelNetwork, "-j", "ACCEPT"}},
-		{"filter", "FORWARD", []string{"-d", flannelNetwork, "-j", "ACCEPT"}},
+		{table: "filter", chain: "FORWARD", pos: 1, rulespec: []string{"-m", "comment", "--comment", "flannel forwarding rules", "-j", FlannelFwdChain}},
+		{table: "filter", chain: FlannelFwdChain, rulespec: []string{"-s", flannelNetwork, "-j", "ACCEPT"}},
+		{table: "filter", chain: FlannelFwdChain, rulespec: []string{"-d", flannelNetwork, "-j", "ACCEPT"}},
 	}
 }
 
@@ -140,6 +146,7 @@ func ensureIPTables(ipt IPTables, rules []IPTablesRule) error {
 		// if all the rules already exist, no need to do anything
 		return nil
 	}
+
 	// Otherwise, teardown all the rules and set them up again
 	// We do this because the order of the rules is important
 	log.Info("Some iptables rules are missing; deleting and recreating rules")
@@ -151,12 +158,16 @@ func ensureIPTables(ipt IPTables, rules []IPTablesRule) error {
 }
 
 func setupIPTables(ipt IPTables, rules []IPTablesRule) error {
-	for _, rule := range rules {
-		log.Info("Adding iptables rule: ", strings.Join(rule.rulespec, " "))
-		err := ipt.AppendUnique(rule.table, rule.chain, rule.rulespec...)
-		if err != nil {
-			return fmt.Errorf("failed to insert IPTables rule: %v", err)
+	// Here we create a chain for forward rules
+	if err := ipt.NewChain("filter", FlannelFwdChain); err != nil {
+		// Exit code 1 means the chain already exists
+		if eerr, ok := err.(*iptables.Error); !ok || eerr.ExitCode() != 1 {
+			return fmt.Errorf("failed to create chain: %v", err)
 		}
+	}
+
+	if err := appendRulesUniq(ipt, rules); err != nil {
+		return err
 	}
 
 	return nil
@@ -169,4 +180,31 @@ func teardownIPTables(ipt IPTables, rules []IPTablesRule) {
 		// doesn't exist, which is fine (we don't need to delete rules that don't exist)
 		ipt.Delete(rule.table, rule.chain, rule.rulespec...)
 	}
+}
+
+func appendRulesUniq(ipt IPTables, rules []IPTablesRule) error {
+	for _, rule := range rules {
+		if rule.pos != 0 {
+			log.Info("Inserting iptables rule: ", strings.Join(rule.rulespec, " "))
+			exists, err := ipt.Exists(rule.table, rule.chain, rule.rulespec...)
+			if err != nil {
+				return fmt.Errorf("failed to insert IPTables rule: %v", err)
+			}
+
+			if exists {
+				continue
+			}
+
+			if err := ipt.Insert(rule.table, rule.chain, rule.pos, rule.rulespec...); err != nil {
+				return fmt.Errorf("failed to insert IPTables rule: %v", err)
+			}
+		} else {
+			log.Info("Appending iptables rule: ", strings.Join(rule.rulespec, " "))
+			err := ipt.AppendUnique(rule.table, rule.chain, rule.rulespec...)
+			if err != nil {
+				return fmt.Errorf("failed to insert IPTables rule: %v", err)
+			}
+		}
+	}
+	return nil
 }

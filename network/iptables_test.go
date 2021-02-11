@@ -68,6 +68,14 @@ func (mock *MockIPTables) AppendUnique(table string, chain string, rulespec ...s
 	return nil
 }
 
+func (mock *MockIPTables) NewChain(table, chain string) error {
+	return nil
+}
+
+func (mock *MockIPTables) Insert(table, chain string, pos int, rulespec ...string) error {
+	return nil
+}
+
 func TestDeleteRules(t *testing.T) {
 	ipt := &MockIPTables{}
 	setupIPTables(ipt, MasqRules(ip.IP4Net{}, lease()))
