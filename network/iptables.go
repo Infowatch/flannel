@@ -139,7 +139,7 @@ func DeleteIPTables(rules []IPTablesRule) error {
 
 func ensureIPTables(ipt IPTables, rules []IPTablesRule) error {
 	for _, rule := range rules {
-		if err := createChain(ipt, rule.table, rule.chain); err != nil {
+		if err := createChainIfNotExists(ipt, rule.table, rule.chain); err != nil {
 			return err
 		}
 	}
@@ -163,7 +163,7 @@ func ensureIPTables(ipt IPTables, rules []IPTablesRule) error {
 	return nil
 }
 
-func createChain(ipt IPTables, table string, chain string) error {
+func createChainIfNotExists(ipt IPTables, table string, chain string) error {
 	if err := ipt.NewChain(table, chain); err != nil {
 		// Exit code 1 means the chain already exists
 		if eerr, ok := err.(*iptables.Error); !ok || eerr.ExitCode() != 1 {
