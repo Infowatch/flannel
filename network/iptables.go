@@ -150,9 +150,15 @@ func DeleteIPTables(rules []IPTablesRule) error {
 }
 
 func ensureIPTables(ipt IPTables, rules []IPTablesRule) error {
+	// Below we create uniq chains if they not exist yet
+	ruleChainUniqMap := make(map[string]struct{})
 	for _, rule := range rules {
-		if err := createChainIfNotExists(ipt, rule.table, rule.chain); err != nil {
-			return err
+		ruleChainKey := fmt.Sprintf("%s-%s", rule.table, rule.chain)
+		if _, ok := ruleChainUniqMap[ruleChainKey]; !ok {
+			if err := createChainIfNotExists(ipt, rule.table, rule.chain); err != nil {
+				return err
+			}
+			ruleChainUniqMap[ruleChainKey] = struct{}{}
 		}
 	}
 
