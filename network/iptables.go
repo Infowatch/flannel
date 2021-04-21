@@ -188,6 +188,7 @@ func createChainIfNotExists(ipt IPTables, table string, chain string) error {
 		if eerr, ok := err.(*iptables.Error); !ok || eerr.ExitCode() != 1 {
 			return fmt.Errorf("failed to create chain: %v", err)
 		}
+	} else {
 		log.Infof("New chain created: %s", chain)
 	}
 
