@@ -28,7 +28,10 @@ import (
 	"github.com/coreos/go-iptables/iptables"
 )
 
-const FlannelFwdChain = "FLANNEL-FORWARD"
+const (
+	FlannelFwdChain   = "FLANNEL-FORWARD"
+	FlannelInputChain = "FLANNEL-INPUT"
+)
 
 type IPTables interface {
 	NewChain(table, chain string) error
@@ -85,6 +88,15 @@ func ForwardRules(flannelNetwork string) []IPTablesRule {
 		{table: "filter", chain: "FORWARD", pos: 1, rulespec: []string{"-m", "comment", "--comment", "flannel forwarding rules", "-j", FlannelFwdChain}},
 		{table: "filter", chain: FlannelFwdChain, rulespec: []string{"-s", flannelNetwork, "-j", "ACCEPT"}},
 		{table: "filter", chain: FlannelFwdChain, rulespec: []string{"-d", flannelNetwork, "-j", "ACCEPT"}},
+	}
+}
+
+func InputRules(flannelNetwork string) []IPTablesRule {
+	return []IPTablesRule{
+		// These rules allow traffic to be forwarded if it is to or from the flannel network range.
+		{table: "filter", chain: "INPUT", pos: 1, rulespec: []string{"-m", "comment", "--comment", "flannel input rules", "-j", FlannelInputChain}},
+		{table: "filter", chain: FlannelInputChain, rulespec: []string{"-s", flannelNetwork, "-j", "ACCEPT"}},
+		{table: "filter", chain: FlannelInputChain, rulespec: []string{"-d", flannelNetwork, "-j", "ACCEPT"}},
 	}
 }
 
@@ -156,6 +168,7 @@ func ensureIPTables(ipt IPTables, rules []IPTablesRule) error {
 	// Otherwise, teardown all the rules and set them up again
 	// We do this because the order of the rules is important
 	log.Info("Some iptables rules are missing; deleting and recreating rules")
+
 	teardownIPTables(ipt, rules)
 	if err = setupIPTables(ipt, rules); err != nil {
 		return fmt.Errorf("Error setting up rules: %v", err)
@@ -169,7 +182,9 @@ func createChainIfNotExists(ipt IPTables, table string, chain string) error {
 		if eerr, ok := err.(*iptables.Error); !ok || eerr.ExitCode() != 1 {
 			return fmt.Errorf("failed to create chain: %v", err)
 		}
+		log.Infof("New chain created: %s", chain)
 	}
+
 	return nil
 }
 

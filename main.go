@@ -314,6 +314,8 @@ func main() {
 		go network.SetupAndEnsureIPTables(network.ForwardRules(config.Network.String()), opts.iptablesResyncSeconds)
 	}
 
+	go network.SetupAndEnsureIPTables(network.InputRules(config.Network.String()), opts.iptablesResyncSeconds)
+
 	if err := WriteSubnetFile(opts.subnetFile, config.Network, opts.ipMasq, bn); err != nil {
 		// Continue, even though it failed.
 		log.Warningf("Failed to write subnet file: %s", err)
