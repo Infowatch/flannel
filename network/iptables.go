@@ -28,7 +28,10 @@ import (
 	"github.com/coreos/go-iptables/iptables"
 )
 
-const FlannelFwdChain = "FLANNEL-FORWARD"
+const (
+	FlannelFwdChain   = "FLANNEL-FORWARD"
+	FlannelInputChain = "FLANNEL-INPUT"
+)
 
 type IPTables interface {
 	NewChain(table, chain string) error
@@ -88,6 +91,14 @@ func ForwardRules(flannelNetwork string) []IPTablesRule {
 	}
 }
 
+func InputRules(flannelNetwork string) []IPTablesRule {
+	return []IPTablesRule{
+		// These rules allow traffic to come to the flannel network range.
+		{table: "filter", chain: "INPUT", pos: 1, rulespec: []string{"-m", "comment", "--comment", "flannel input rules", "-j", FlannelInputChain}},
+		{table: "filter", chain: FlannelInputChain, rulespec: []string{"-s", flannelNetwork, "-j", "ACCEPT"}},
+	}
+}
+
 func ipTablesRulesExist(ipt IPTables, rules []IPTablesRule) (bool, error) {
 	for _, rule := range rules {
 		exists, err := ipt.Exists(rule.table, rule.chain, rule.rulespec...)
@@ -138,6 +149,18 @@ func DeleteIPTables(rules []IPTablesRule) error {
 }
 
 func ensureIPTables(ipt IPTables, rules []IPTablesRule) error {
+	// Below we create uniq chains if they not exist yet
+	tableChainUniqMap := make(map[string]struct{})
+	for _, rule := range rules {
+		tableChainKey := fmt.Sprintf("%s-%s", rule.table, rule.chain)
+		if _, ok := tableChainUniqMap[tableChainKey]; !ok {
+			if err := createChainIfNotExists(ipt, rule.table, rule.chain); err != nil {
+				return err
+			}
+			tableChainUniqMap[tableChainKey] = struct{}{}
+		}
+	}
+
 	exists, err := ipTablesRulesExist(ipt, rules)
 	if err != nil {
 		return fmt.Errorf("Error checking rule existence: %v", err)
@@ -150,6 +173,7 @@ func ensureIPTables(ipt IPTables, rules []IPTablesRule) error {
 	// Otherwise, teardown all the rules and set them up again
 	// We do this because the order of the rules is important
 	log.Info("Some iptables rules are missing; deleting and recreating rules")
+
 	teardownIPTables(ipt, rules)
 	if err = setupIPTables(ipt, rules); err != nil {
 		return fmt.Errorf("Error setting up rules: %v", err)
@@ -157,15 +181,20 @@ func ensureIPTables(ipt IPTables, rules []IPTablesRule) error {
 	return nil
 }
 
-func setupIPTables(ipt IPTables, rules []IPTablesRule) error {
-	// Here we create a chain for forward rules
-	if err := ipt.NewChain("filter", FlannelFwdChain); err != nil {
+func createChainIfNotExists(ipt IPTables, table string, chain string) error {
+	if err := ipt.NewChain(table, chain); err != nil {
 		// Exit code 1 means the chain already exists
 		if eerr, ok := err.(*iptables.Error); !ok || eerr.ExitCode() != 1 {
 			return fmt.Errorf("failed to create chain: %v", err)
 		}
+	} else {
+		log.Infof("New chain created: %s", chain)
 	}
 
+	return nil
+}
+
+func setupIPTables(ipt IPTables, rules []IPTablesRule) error {
 	if err := appendRulesUniq(ipt, rules); err != nil {
 		return err
 	}

@@ -98,6 +98,7 @@ type CmdLineOpts struct {
 	charonViciUri          string
 	iptablesResyncSeconds  int
 	iptablesForwardRules   bool
+	iptablesInputRules     bool
 	netConfPath            string
 }
 
@@ -131,6 +132,7 @@ func init() {
 	flannelFlags.IntVar(&opts.healthzPort, "healthz-port", 0, "the port for healthz server to listen(0 to disable)")
 	flannelFlags.IntVar(&opts.iptablesResyncSeconds, "iptables-resync", 5, "resync period for iptables rules, in seconds")
 	flannelFlags.BoolVar(&opts.iptablesForwardRules, "iptables-forward-rules", true, "add default accept rules to FORWARD chain in iptables")
+	flannelFlags.BoolVar(&opts.iptablesInputRules, "iptables-input-rules", true, "add default accept rules to INPUT chain in iptables")
 	flannelFlags.StringVar(&opts.netConfPath, "net-config-path", "/etc/kube-flannel/net-conf.json", "path to the network configuration file")
 
 	// glog will log to tmp files by default. override so all entries
@@ -312,6 +314,11 @@ func main() {
 	if opts.iptablesForwardRules {
 		log.Infof("Changing default FORWARD chain policy to ACCEPT")
 		go network.SetupAndEnsureIPTables(network.ForwardRules(config.Network.String()), opts.iptablesResyncSeconds)
+	}
+
+	if opts.iptablesInputRules {
+		log.Infof("Changing default INPUT chain policy to ACCEPT")
+		go network.SetupAndEnsureIPTables(network.InputRules(config.Network.String()), opts.iptablesResyncSeconds)
 	}
 
 	if err := WriteSubnetFile(opts.subnetFile, config.Network, opts.ipMasq, bn); err != nil {
