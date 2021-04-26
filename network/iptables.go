@@ -93,7 +93,7 @@ func ForwardRules(flannelNetwork string) []IPTablesRule {
 
 func InputRules(flannelNetwork string) []IPTablesRule {
 	return []IPTablesRule{
-		// These rules allow traffic to be forwarded if it is to or from the flannel network range.
+		// These rules allow traffic to come to the flannel network range.
 		{table: "filter", chain: "INPUT", pos: 1, rulespec: []string{"-m", "comment", "--comment", "flannel input rules", "-j", FlannelInputChain}},
 		{table: "filter", chain: FlannelInputChain, rulespec: []string{"-s", flannelNetwork, "-j", "ACCEPT"}},
 		{table: "filter", chain: FlannelInputChain, rulespec: []string{"-d", flannelNetwork, "-j", "ACCEPT"}},
